@@ -225,7 +225,7 @@ export function apply(ctx: any): void {
         }
       },
     })
-  }  }
+  }
   ctx.inject(['sessionProjections'], (projectionCtx: any) => {
     projectionCtx.sessionProjections.register({
       key: 'cost-meter',

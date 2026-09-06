@@ -1,11 +1,12 @@
 /**
  * dsh-cost-meter — client half.
- * 展示点 1：每条回答的动作行（conversation.chat.assistant-actions）本轮费用 + token + 峰谷标记 + 模型
- *          —— 只在每轮最后一条 assistant 消息上显示（与官方 feedback/filesnap 动作并列共存）。
- * 展示点 2：会话标题行（conversation.session.header.utilities）本会话累计费用。
- * 展示点 3：输入框上方实时速度（conversation.input.dock）——像下载速度一样显示
- *          ¥/s 与 tok/s（6 秒滑窗均值，流式结束后自动隐藏）。
- * 数据全部来自 host 投影 'cost-meter'（useProjection 消费，无需任何网络请求）。
+ * 数据获取：HTTP 轮询 host 直读 API /dsh-cost-meter/api/status?sessionId=...
+ * （不依赖 useProjection 推送——解决投影注册晚于会话打开时数据不刷新的时序缺陷；
+ *   速度徽章 1 秒轮询，其余 3 秒轮询。）
+ * 展示点：
+ *   1. 每条回答动作行（assistant-actions）本轮费用（仅每轮最后一条消息显示）
+ *   2. 会话标题行（header.utilities）累计费用
+ *   3. 输入框上方（input.dock）实时消耗速度 ¥/s · tok/s（6 秒滑窗）
  */
 import * as React from 'react'
 
@@ -13,6 +14,24 @@ export const inject = ['slots']
 
 const SEC = 'var(--dsw-alias-label-secondary, #888)'
 const WARN = 'var(--dsw-alias-state-warn-primary, #b8860b)'
+
+interface TurnRec {
+  turn: number
+  costCny: number
+  inputTokens: number
+  cacheReadTokens: number
+  outputTokens: number
+  reasoningTokens: number
+  model: string
+  peak: boolean
+  lastTs: number
+  lastMessageId: string
+}
+
+interface CostView {
+  turns: TurnRec[]
+  totals: { inputTokens: number; cacheReadTokens: number; outputTokens: number; reasoningTokens: number; costCny: number }
+}
 
 function fmtTokens(n: number): string {
   if (!Number.isFinite(n)) return '0'
@@ -25,10 +44,35 @@ function shortModel(model: string): string {
   return String(model || '').replace(/^deepseek-/, '').replace(/-vision-exp$/, '-vx') || ''
 }
 
-/** assistant-actions：owner 提供 messageId；从投影里找 lastMessageId 匹配的轮记录 */
-function TurnCost(props: { messageId?: unknown; useProjection?: any }): React.ReactElement | null {
-  const view = props.useProjection?.('cost-meter')
-  const rec = view?.turns?.find((t: { lastMessageId?: string }) => t.lastMessageId !== '' && t.lastMessageId === props.messageId)
+/** 轮询 host 直读 API */
+function useCostView(sessionId: string | undefined, intervalMs: number): CostView | null {
+  const [data, setData] = React.useState<CostView | null>(null)
+  React.useEffect(() => {
+    if (sessionId === undefined || sessionId === null || sessionId === '') {
+      setData(null)
+      return
+    }
+    let alive = true
+    const poll = () => {
+      fetch('/dsh-cost-meter/api/status?sessionId=' + encodeURIComponent(String(sessionId)))
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d) => {
+          if (alive && d && d.ok && d.data) setData(d.data as CostView)
+          else if (alive && d && d.ok && d.data === null) setData(null)
+        })
+        .catch(() => {})
+    }
+    poll()
+    const id = setInterval(poll, intervalMs)
+    return () => { alive = false; clearInterval(id) }
+  }, [sessionId, intervalMs])
+  return data
+}
+
+function TurnCost(props: { messageId?: unknown; sessionId?: string }): React.ReactElement | null {
+  const view = useCostView(props.sessionId, 3000)
+  if (view === null) return null
+  const rec = view.turns.find((t) => t.lastMessageId !== '' && t.lastMessageId === props.messageId)
   if (rec === undefined || !Number.isFinite(rec.costCny)) return null
   const tokens = (rec.inputTokens ?? 0) + (rec.cacheReadTokens ?? 0) + (rec.outputTokens ?? 0)
   return React.createElement(
@@ -48,9 +92,8 @@ function TurnCost(props: { messageId?: unknown; useProjection?: any }): React.Re
   )
 }
 
-/** 会话累计费用徽章（标题行右侧） */
-function TotalBadge(props: { useProjection?: any }): React.ReactElement | null {
-  const view = props.useProjection?.('cost-meter')
+function TotalBadge(props: { sessionId?: string }): React.ReactElement | null {
+  const view = useCostView(props.sessionId, 3000)
   const totals = view?.totals
   if (totals === undefined || !Number.isFinite(totals.costCny) || totals.costCny <= 0) return null
   const tokens = (totals.inputTokens ?? 0) + (totals.cacheReadTokens ?? 0) + (totals.outputTokens ?? 0)
@@ -70,30 +113,31 @@ const MIN_RATE = 1e-6
 
 interface SpeedSample { t: number; cost: number; tokens: number }
 
-/** 实时消耗速度徽章（¥/s · tok/s，6 秒滑窗） */
-function SpeedBadge(props: { useProjection?: any }): React.ReactElement | null {
-  const view = props.useProjection?.('cost-meter')
-  const totals = view?.totals
-  const cost = totals?.costCny
-  const tokens = (totals?.inputTokens ?? 0) + (totals?.cacheReadTokens ?? 0) + (totals?.outputTokens ?? 0)
-  const samplesRef = React.useRef<SpeedSample[]>([])
+function SpeedBadge(props: { sessionId?: string }): React.ReactElement | null {
+  const [samples, setSamples] = React.useState<SpeedSample[]>([])
   const [now, setNow] = React.useState<number>(Date.now())
-  const [sampleVersion, setSampleVersion] = React.useState<number>(0)
 
   React.useEffect(() => {
-    if (typeof cost === 'number' && Number.isFinite(cost)) {
-      samplesRef.current = [...samplesRef.current.slice(-120), { t: Date.now(), cost, tokens }]
-      setSampleVersion((n) => n + 1)
+    if (props.sessionId === undefined || props.sessionId === '') return
+    let alive = true
+    const poll = () => {
+      fetch('/dsh-cost-meter/api/status?sessionId=' + encodeURIComponent(String(props.sessionId)))
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d) => {
+          if (!alive || !d || !d.ok || !d.data) return
+          const totals = (d.data as CostView).totals
+          if (!totals) return
+          const tokens = (totals.inputTokens ?? 0) + (totals.cacheReadTokens ?? 0) + (totals.outputTokens ?? 0)
+          setSamples((prev) => [...prev.slice(-120), { t: Date.now(), cost: totals.costCny, tokens }])
+        })
+        .catch(() => {})
     }
-  }, [cost, tokens])
+    poll()
+    const id = setInterval(poll, 1000)
+    const tick = setInterval(() => setNow(Date.now()), 1000)
+    return () => { alive = false; clearInterval(id); clearInterval(tick) }
+  }, [props.sessionId])
 
-  React.useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 1000)
-    return () => clearInterval(id)
-  }, [])
-
-  void sampleVersion
-  const samples = samplesRef.current
   if (samples.length < 2) return null
   const last = samples[samples.length - 1]
   if (now - last.t > IDLE_HIDE_MS) return null

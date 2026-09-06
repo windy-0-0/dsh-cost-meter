@@ -15,17 +15,8 @@
  *  - 投影由 sessionProjections 按事件流重放：历史会话、重启后均自动重建，无内存态丢失。
  */
 import { z } from 'zod'
-import { appendFileSync } from 'node:fs'
-import { homedir } from 'node:os'
-import { join } from 'node:path'
 
 export const name = 'dsh-cost-meter'
-
-function debugLog(msg: string): void {
-  try {
-    appendFileSync(join(process.env.DSH_HOME || join(homedir(), '.dsh'), 'cost-meter-debug.log'), new Date().toISOString() + ' ' + msg + '\n')
-  } catch { /* 静默 */ }
-}
 
 // ── 定价（DeepSeek 2026-08-17 生效，¥ / 百万 token，[谷价, 峰价]）──
 const PEAK_HOURS: ReadonlyArray<readonly [number, number]> = [[9, 12], [14, 18]]
@@ -196,9 +187,46 @@ function view(state: CostState) {
 }
 
 export function apply(ctx: any): void {
-  debugLog('apply entered')
+  // HTTP 直读 API：client 轮询拉取投影状态（绕开投影推送对已打开会话的时序缺陷）
+  const webServer = ctx.get('webServer')
+  if (webServer && typeof webServer.register === 'function') {
+    webServer.register({
+      kind: 'prefix',
+      path: '/dsh-cost-meter/api',
+      handler: async (req: any, res: any) => {
+        const send = (code: number, obj: unknown) => {
+          res.writeHead(code, { 'content-type': 'application/json; charset=utf-8' })
+          res.end(JSON.stringify(obj))
+        }
+        try {
+          const u = new URL(req.url ?? '/', 'http://localhost')
+          const path = u.pathname.replace(/^\/dsh-cost-meter\/api/, '') || '/'
+          if (req.method === 'GET' && path === '/status') {
+            const sid = u.searchParams.get('sessionId')
+            if (!sid) return send(400, { ok: false, error: 'sessionId required' })
+            const sessions = ctx.get('sessions')
+            const sp = ctx.get('sessionProjections')
+            const session = sessions && typeof sessions.list === 'function'
+              ? sessions.list().find((s: any) => s && String(s.id) === sid)
+              : undefined
+            if (!session) return send(404, { ok: false, error: 'session not found' })
+            if (!sp || typeof sp.stateOf !== 'function') return send(500, { ok: false, error: 'no projection service' })
+            try {
+              const state = sp.stateOf(session, 'cost-meter')
+              if (state === undefined) return send(200, { ok: true, data: null })
+              return send(200, { ok: true, data: view(state) })
+            } catch (e) {
+              return send(500, { ok: false, error: String(e instanceof Error ? e.message : e) })
+            }
+          }
+          return send(404, { ok: false, error: 'not found' })
+        } catch (e) {
+          return send(500, { ok: false, error: String(e instanceof Error ? e.message : e) })
+        }
+      },
+    })
+  }  }
   ctx.inject(['sessionProjections'], (projectionCtx: any) => {
-    debugLog('sessionProjections injected')
     projectionCtx.sessionProjections.register({
       key: 'cost-meter',
       stateSchema,
@@ -207,6 +235,5 @@ export function apply(ctx: any): void {
       wire: { viewSchema: z.object({ turns: z.array(z.any()), totals: totalsSchema }), view },
       stateVersion: 2,
     })
-    debugLog('projection registered ok')
   })
 }

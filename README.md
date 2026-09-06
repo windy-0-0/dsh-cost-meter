@@ -62,7 +62,7 @@ npm install dsh-cost-meter
 ## Roadmap
 
 - [x] v0.1 每轮/每会话精确费用
-- [ ] 生成质量评估（LLM-as-judge + 程序化指标，调研中）
+- [ ] 生成质量评估与任务交付评估（**调研已完成**：见 [docs/quality-evaluation-research.md](docs/quality-evaluation-research.md)——36 篇权威文献，两级方案：L1 确定性程序化指标 + L2 LLM-judge 防偏差协议）
 - [ ] 生成效率与执行过程质量分析
 
 ## License

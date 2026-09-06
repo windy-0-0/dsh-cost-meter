@@ -1,6 +1,7 @@
 /**
  * dsh-cost-meter — client half.
- * 展示点 1：每轮尾部（conversation.chat.turnTail）本轮费用 + token + 峰谷标记 + 模型。
+ * 展示点 1：每条回答的动作行（conversation.chat.assistant-actions）本轮费用 + token + 峰谷标记 + 模型
+ *          —— 只在每轮最后一条 assistant 消息上显示（与官方 feedback/filesnap 动作并列共存）。
  * 展示点 2：会话标题行（conversation.session.header.utilities）本会话累计费用。
  * 数据全部来自 host 投影 'cost-meter'（useProjection 消费，无需任何网络请求）。
  */
@@ -22,15 +23,10 @@ function shortModel(model: string): string {
   return String(model || '').replace(/^deepseek-/, '').replace(/-vision-exp$/, '-vx') || ''
 }
 
-/** turnTail：select 返回 { turn }，组件从投影视图匹配该轮记录 */
-function selectTurn(owner: { turn?: unknown } | null): { turn: number } | null {
-  if (owner === null || owner === undefined || !Number.isInteger(owner.turn)) return null
-  return { turn: owner.turn as number }
-}
-
-function TurnCost(props: { matched?: { turn: number } | null; useProjection?: any }): React.ReactElement | null {
+/** assistant-actions：owner 提供 messageId；从投影里找 lastMessageId 匹配的轮记录 */
+function TurnCost(props: { messageId?: unknown; useProjection?: any }): React.ReactElement | null {
   const view = props.useProjection?.('cost-meter')
-  const rec = view?.turns?.find((t: { turn: number }) => t.turn === props.matched?.turn)
+  const rec = view?.turns?.find((t: { lastMessageId?: string }) => t.lastMessageId !== '' && t.lastMessageId === props.messageId)
   if (rec === undefined || !Number.isFinite(rec.costCny)) return null
   const tokens = (rec.inputTokens ?? 0) + (rec.cacheReadTokens ?? 0) + (rec.outputTokens ?? 0)
   return React.createElement(
@@ -67,9 +63,9 @@ function TotalBadge(props: { useProjection?: any }): React.ReactElement | null {
 }
 
 export function apply(ctx: any): void {
-  ctx.effect(() => ctx.slots.inject('conversation.chat.turnTail', () =>
-    ctx.slots.register({ name: "conversation.chat.turnTail", select: selectTurn }, TurnCost),
-  ), 'dsh-cost-meter: turn tail')
+  ctx.effect(() => ctx.slots.inject('conversation.chat.assistant-actions', () =>
+    ctx.slots.register({ name: "conversation.chat.assistant-actions", id: "dsh-cost-turn", order: 40, label: () => "本轮费用" }, TurnCost),
+  ), 'dsh-cost-meter: turn cost action')
   ctx.effect(() => ctx.slots.inject('conversation.session.header.utilities', () =>
     ctx.slots.register({ name: "conversation.session.header.utilities", id: "dsh-cost-total", order: 60, label: () => "会话费用" }, TotalBadge),
   ), 'dsh-cost-meter: header total')

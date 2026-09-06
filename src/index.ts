@@ -15,8 +15,17 @@
  *  - 投影由 sessionProjections 按事件流重放：历史会话、重启后均自动重建，无内存态丢失。
  */
 import z from 'schemastery'
+import { appendFileSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 
 export const name = 'dsh-cost-meter'
+
+function debugLog(msg: string): void {
+  try {
+    appendFileSync(join(process.env.DSH_HOME || join(homedir(), '.dsh'), 'cost-meter-debug.log'), new Date().toISOString() + ' ' + msg + '\n')
+  } catch { /* 静默 */ }
+}
 
 // ── 定价（DeepSeek 2026-08-17 生效，¥ / 百万 token，[谷价, 峰价]）──
 const PEAK_HOURS: ReadonlyArray<readonly [number, number]> = [[9, 12], [14, 18]]
@@ -65,6 +74,7 @@ const turnSchema = z.object({
   model: z.string(),
   peak: z.boolean(),
   lastTs: z.number(),
+  lastMessageId: z.string(),
 })
 
 const totalsSchema = z.object({
@@ -92,6 +102,7 @@ type CostState = {
     model: string
     peak: boolean
     lastTs: number
+    lastMessageId: string
   }>
   totals: {
     inputTokens: number
@@ -142,7 +153,7 @@ function reduceCost(state: CostState, event: any): CostState {
   if (entry === undefined) {
     entry = {
       turn, inputTokens: 0, cacheReadTokens: 0, outputTokens: 0, reasoningTokens: 0,
-      costCny: 0, model, peak, lastTs: tsSec,
+      costCny: 0, model, peak, lastTs: tsSec, lastMessageId: '',
     }
     state.turns.push(entry)
   }
@@ -154,6 +165,8 @@ function reduceCost(state: CostState, event: any): CostState {
   entry.model = model || entry.model
   entry.peak = entry.peak || peak
   entry.lastTs = tsSec
+  const mid = data?.message?.id
+  if (typeof mid === 'string' && mid) entry.lastMessageId = mid
 
   state.totals.inputTokens += input
   state.totals.cacheReadTokens += cacheRead
@@ -176,20 +189,24 @@ function view(state: CostState) {
       model: t.model,
       peak: t.peak,
       lastTs: t.lastTs,
+      lastMessageId: t.lastMessageId,
     })),
     totals: state.totals,
   }
 }
 
 export function apply(ctx: any): void {
+  debugLog('apply entered')
   ctx.inject(['sessionProjections'], (projectionCtx: any) => {
+    debugLog('sessionProjections injected')
     projectionCtx.sessionProjections.register({
       key: 'cost-meter',
       stateSchema,
       init,
       apply: reduceCost,
       wire: { viewSchema: z.object({ turns: z.array(z.any()), totals: totalsSchema }), view },
-      stateVersion: 1,
+      stateVersion: 2,
     })
+    debugLog('projection registered ok')
   })
 }

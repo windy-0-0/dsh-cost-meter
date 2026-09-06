@@ -14,7 +14,7 @@
  *    2026-08-23 起周末全天谷价（历史事件按发生时刻分桶，带生效分界）。
  *  - 投影由 sessionProjections 按事件流重放：历史会话、重启后均自动重建，无内存态丢失。
  */
-import z from 'schemastery'
+import { z } from 'zod'
 import { appendFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'

@@ -3,6 +3,8 @@
  * 展示点 1：每条回答的动作行（conversation.chat.assistant-actions）本轮费用 + token + 峰谷标记 + 模型
  *          —— 只在每轮最后一条 assistant 消息上显示（与官方 feedback/filesnap 动作并列共存）。
  * 展示点 2：会话标题行（conversation.session.header.utilities）本会话累计费用。
+ * 展示点 3：输入框上方实时速度（conversation.input.dock）——像下载速度一样显示
+ *          ¥/s 与 tok/s（6 秒滑窗均值，流式结束后自动隐藏）。
  * 数据全部来自 host 投影 'cost-meter'（useProjection 消费，无需任何网络请求）。
  */
 import * as React from 'react'
@@ -62,6 +64,65 @@ function TotalBadge(props: { useProjection?: any }): React.ReactElement | null {
   )
 }
 
+const WINDOW_MS = 6000
+const IDLE_HIDE_MS = 3000
+const MIN_RATE = 1e-6
+
+interface SpeedSample { t: number; cost: number; tokens: number }
+
+/** 实时消耗速度徽章（¥/s · tok/s，6 秒滑窗） */
+function SpeedBadge(props: { useProjection?: any }): React.ReactElement | null {
+  const view = props.useProjection?.('cost-meter')
+  const totals = view?.totals
+  const cost = totals?.costCny
+  const tokens = (totals?.inputTokens ?? 0) + (totals?.cacheReadTokens ?? 0) + (totals?.outputTokens ?? 0)
+  const samplesRef = React.useRef<SpeedSample[]>([])
+  const [now, setNow] = React.useState<number>(Date.now())
+  const [sampleVersion, setSampleVersion] = React.useState<number>(0)
+
+  React.useEffect(() => {
+    if (typeof cost === 'number' && Number.isFinite(cost)) {
+      samplesRef.current = [...samplesRef.current.slice(-120), { t: Date.now(), cost, tokens }]
+      setSampleVersion((n) => n + 1)
+    }
+  }, [cost, tokens])
+
+  React.useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(id)
+  }, [])
+
+  void sampleVersion
+  const samples = samplesRef.current
+  if (samples.length < 2) return null
+  const last = samples[samples.length - 1]
+  if (now - last.t > IDLE_HIDE_MS) return null
+  let first: SpeedSample | undefined
+  for (const s of samples) {
+    if (now - s.t <= WINDOW_MS) { first = s; break }
+  }
+  if (first === undefined || first === last) return null
+  const dtSec = (last.t - first.t) / 1000
+  if (dtSec <= 0.2) return null
+  const rateCny = (last.cost - first.cost) / dtSec
+  const rateTok = (last.tokens - first.tokens) / dtSec
+  if (rateCny < MIN_RATE && rateTok <= 0) return null
+
+  return React.createElement(
+    'div',
+    {
+      style: {
+        display: 'flex', alignItems: 'center', gap: '8px',
+        fontSize: '11px', color: SEC,
+        padding: '1px 6px 0', userSelect: 'none',
+      },
+      title: '实时消耗速度（6 秒滑窗均值）：费用 ¥/s 与 token/s',
+    },
+    React.createElement('span', { style: { fontWeight: 600 } }, `⚡ ¥${rateCny.toFixed(4)}/s`),
+    React.createElement('span', null, `${fmtTokens(Math.round(rateTok))}/s`),
+  )
+}
+
 export function apply(ctx: any): void {
   ctx.effect(() => ctx.slots.inject('conversation.chat.assistant-actions', () =>
     ctx.slots.register({ name: "conversation.chat.assistant-actions", id: "dsh-cost-turn", order: 40, label: () => "本轮费用" }, TurnCost),
@@ -69,4 +130,7 @@ export function apply(ctx: any): void {
   ctx.effect(() => ctx.slots.inject('conversation.session.header.utilities', () =>
     ctx.slots.register({ name: "conversation.session.header.utilities", id: "dsh-cost-total", order: 60, label: () => "会话费用" }, TotalBadge),
   ), 'dsh-cost-meter: header total')
+  ctx.effect(() => ctx.slots.inject('conversation.input.dock', () =>
+    ctx.slots.register({ name: "conversation.input.dock", id: "dsh-cost-speed", order: 35, label: () => "消耗速度" }, SpeedBadge),
+  ), 'dsh-cost-meter: live speed')
 }

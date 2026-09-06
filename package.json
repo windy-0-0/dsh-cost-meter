@@ -1,6 +1,6 @@
 {
   "name": "dsh-cost-meter",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "DSH 会话费用计量：每轮/每会话精确费用 + 实时消耗速度（¥/s·tok/s），官方 disjoint token 语义 + 缓存命中 + 峰谷定价",
   "private": true,
   "type": "module",
@@ -14,7 +14,9 @@
     "lib/types",
     "cordis.patch.yml",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "README_EN.md",
+    "docs/quality-evaluation-research.md"
   ],
   "license": "BSD-3-Clause",
   "peerDependencies": {

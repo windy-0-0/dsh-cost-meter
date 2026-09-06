@@ -190,7 +190,8 @@ export function apply(ctx: any): void {
   // HTTP 直读 API：client 轮询拉取投影状态（绕开投影推送对已打开会话的时序缺陷）
   const webServer = ctx.get('webServer')
   if (webServer && typeof webServer.register === 'function') {
-    webServer.register({
+    ctx.effect(() => {
+      const dispose = webServer.register({
       kind: 'prefix',
       path: '/dsh-cost-meter/api',
       handler: async (req: any, res: any) => {
@@ -224,6 +225,8 @@ export function apply(ctx: any): void {
           return send(500, { ok: false, error: String(e instanceof Error ? e.message : e) })
         }
       },
+    })
+      return () => { if (typeof dispose === 'function') dispose() }
     })
   }
   ctx.inject(['sessionProjections'], (projectionCtx: any) => {

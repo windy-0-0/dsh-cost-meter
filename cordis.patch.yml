@@ -1,0 +1,4 @@
+# Mounts dsh-cost-meter into the profile that installed it.
+- insert:
+    - id: cost-meter
+      name: "dsh-cost-meter"

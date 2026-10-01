@@ -1,6 +1,6 @@
 {
   "name": "dsh-cost-meter",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "DSH 会话费用计量：每轮/每会话精确费用 + 实时消耗速度（¥/s·tok/s），官方 disjoint token 语义 + 缓存命中 + 峰谷定价",
   "private": true,
   "type": "module",

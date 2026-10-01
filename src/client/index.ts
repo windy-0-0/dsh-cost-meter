@@ -7,6 +7,13 @@
  *   1. 每条回答动作行（assistant-actions）本轮费用（仅每轮最后一条消息显示）
  *   2. 会话标题行（header.utilities）累计费用
  *   3. 输入框上方（input.dock）实时消耗速度 ¥/s · tok/s（6 秒滑窗）
+ *
+ * ⚠ 口径说明（2026-10-01 补，见 L-2026-10-01-08）：
+ *   本插件显示的是**按官方价目表折算的等效费用**，不是平台实际扣费。
+ *   本机主车道可走第三方中转平台（codearts / buddy / lobsterai / trae）或网页免费通道，
+ *   这些**不扣 DeepSeek 官方余额** ⇒ 面板金额与真实账单**本就不是一回事**。
+ *   真实扣费请看 `dsh-usage-guard`（它直读官方 `/usage/by_api_key/cost`）。
+ *   所以四处文案都用「估算」而非「费用」，并在 title 里写清口径。
  */
 import * as React from 'react'
 
@@ -14,6 +21,14 @@ export const inject = ['slots']
 
 const SEC = 'var(--dsw-alias-label-secondary, #888)'
 const WARN = 'var(--dsw-alias-state-warn-primary, #b8860b)'
+
+/**
+ * 口径说明后缀 —— 追加到各徽章的 title（悬停可见）。
+ * 单独抽出来是为了**四处文案不会各写一遍**（口径只有一处真源）。
+ */
+const SCOPE_NOTE =
+  '口径：按 DeepSeek 官方价目表折算的**等效估算**，非平台实际扣费；' +
+  '第三方中转平台与免费网页通道不计入官方账单，真实扣费见 dsh-usage-guard。'
 
 interface TurnRec {
   turn: number
@@ -83,9 +98,9 @@ function TurnCost(props: { messageId?: unknown; sessionId?: string }): React.Rea
         fontSize: '11px', lineHeight: 1, color: SEC,
         padding: '0 2px', userSelect: 'none',
       },
-      title: `输入(未命中缓存) ${fmtTokens(rec.inputTokens ?? 0)} · 缓存命中 ${fmtTokens(rec.cacheReadTokens ?? 0)} · 输出 ${fmtTokens(rec.outputTokens ?? 0)}（含思考 ${fmtTokens(rec.reasoningTokens ?? 0)}）`,
+      title: `本轮估算费用（输入未命中缓存 ${fmtTokens(rec.inputTokens ?? 0)} · 缓存命中 ${fmtTokens(rec.cacheReadTokens ?? 0)} · 输出 ${fmtTokens(rec.outputTokens ?? 0)}，含思考 ${fmtTokens(rec.reasoningTokens ?? 0)}）\n${SCOPE_NOTE}`,
     },
-    React.createElement('span', { style: { fontWeight: 600 } }, `¥ ${rec.costCny.toFixed(4)}`),
+    React.createElement('span', { style: { fontWeight: 600 } }, `~¥ ${rec.costCny.toFixed(4)}`),
     React.createElement('span', null, `${fmtTokens(tokens)} tok`),
     rec.peak ? React.createElement('span', { style: { color: WARN } }, '峰时') : null,
     rec.model ? React.createElement('span', null, shortModel(rec.model)) : null,
@@ -101,9 +116,9 @@ function TotalBadge(props: { sessionId?: string }): React.ReactElement | null {
     'span',
     {
       style: { fontSize: '11.5px', color: SEC, userSelect: 'none', whiteSpace: 'nowrap' },
-      title: `本会话费用：输入(未命中) ${fmtTokens(totals.inputTokens ?? 0)} · 缓存命中 ${fmtTokens(totals.cacheReadTokens ?? 0)} · 输出 ${fmtTokens(totals.outputTokens ?? 0)}（含思考 ${fmtTokens(totals.reasoningTokens ?? 0)}）`,
+      title: `本会话估算费用（输入未命中缓存 ${fmtTokens(totals.inputTokens ?? 0)} · 缓存命中 ${fmtTokens(totals.cacheReadTokens ?? 0)} · 输出 ${fmtTokens(totals.outputTokens ?? 0)}，含思考 ${fmtTokens(totals.reasoningTokens ?? 0)}）\n${SCOPE_NOTE}`,
     },
-    `¥ ${totals.costCny.toFixed(4)} · ${fmtTokens(tokens)} tok`,
+    `~¥ ${totals.costCny.toFixed(4)} · ${fmtTokens(tokens)} tok`,
   )
 }
 
@@ -160,19 +175,19 @@ function SpeedBadge(props: { sessionId?: string }): React.ReactElement | null {
         fontSize: '11px', color: SEC,
         padding: '1px 6px 0', userSelect: 'none',
       },
-      title: '实时消耗速度（6 秒滑窗均值）：费用 ¥/s 与 token/s',
+      title: '实时消耗速度（6 秒滑窗均值）：费用 ¥/s 与 token/s\n' + SCOPE_NOTE,
     },
-    React.createElement('span', { style: { fontWeight: 600 } }, `⚡ ¥${rateCny.toFixed(4)}/s`),
+    React.createElement('span', { style: { fontWeight: 600 } }, `⚡ ~¥${rateCny.toFixed(4)}/s`),
     React.createElement('span', null, `${fmtTokens(Math.round(rateTok))}/s`),
   )
 }
 
 export function apply(ctx: any): void {
   ctx.effect(() => ctx.slots.inject('conversation.chat.assistant-actions', () =>
-    ctx.slots.register({ name: "conversation.chat.assistant-actions", id: "dsh-cost-turn", order: 40, label: () => "本轮费用" }, TurnCost),
+    ctx.slots.register({ name: "conversation.chat.assistant-actions", id: "dsh-cost-turn", order: 40, label: () => "本轮估算费用" }, TurnCost),
   ), 'dsh-cost-meter: turn cost action')
   ctx.effect(() => ctx.slots.inject('conversation.session.header.utilities', () =>
-    ctx.slots.register({ name: "conversation.session.header.utilities", id: "dsh-cost-total", order: 60, label: () => "会话费用" }, TotalBadge),
+    ctx.slots.register({ name: "conversation.session.header.utilities", id: "dsh-cost-total", order: 60, label: () => "会话估算费用" }, TotalBadge),
   ), 'dsh-cost-meter: header total')
   ctx.effect(() => ctx.slots.inject('conversation.input.dock', () =>
     ctx.slots.register({ name: "conversation.input.dock", id: "dsh-cost-speed", order: 35, label: () => "消耗速度" }, SpeedBadge),
